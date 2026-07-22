@@ -1,0 +1,150 @@
+name: Build InfinityX - Creek
+
+# Manual trigger only - jalanin dari tab "Actions" di GitHub, dari browser HP juga bisa
+on:
+  workflow_dispatch:
+    inputs:
+      DEVICE:
+        description: 'Codename device'
+        required: true
+        default: 'creek'
+      LUNCH_COMBO:
+        description: 'Lunch combo lengkap (contoh: infinity_creek-userdebug)'
+        required: true
+        default: 'infinity_creek-userdebug'
+      BUILD_TARGET:
+        description: 'Target build (bacon / otapackage / dll, tergantung ROM)'
+        required: true
+        default: 'bacon'
+      CLEAN_BUILD:
+        description: 'Clean build? (true/false) - matiin kalau mau pake ccache dari run sebelumnya'
+        required: true
+        default: 'false'
+
+# Cegah 2 build jalan bareng biar gak rebutan resource runner
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Free tier GitHub Actions: max 6 jam per job. Kalau kepotong, tinggal re-run,
+    # ccache & repo sync yang udah ke-cache bakal mempercepat run berikutnya.
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout local_manifests repo
+        uses: actions/checkout@v4
+        with:
+          path: local_manifests_src
+
+      # Runner default cuma ~14GB free space, gak akan cukup buat AOSP.
+      # Step ini buang tools/SDK yang gak kepake (dotnet, android sdk bawaan, dll)
+      # buat nambahin ruang kosong sampai ~30GB+
+      - name: Free up disk space
+        run: |
+          echo "Before:"
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/boost "$AGENT_TOOLSDIRECTORY" /usr/local/.ghcup \
+            /opt/hostedtoolcache /usr/lib/jvm/* || true
+          sudo apt-get clean
+          docker system prune -af || true
+          echo "After:"
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 libncurses5 lib32ncurses5-dev x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+            openjdk-17-jdk python3 python-is-python3 rsync ccache bc
+
+      - name: Install repo tool
+        run: |
+          mkdir -p ~/bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Configure git identity
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git config --global color.ui false
+
+      # ccache mempercepat build ulang secara signifikan - wajib dipake
+      # di free tier biar gak selalu kena timeout 6 jam
+      - name: Setup ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.event.inputs.DEVICE }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ github.event.inputs.DEVICE }}-
+
+      - name: Init InfinityX manifest
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p rom && cd rom
+          repo init --no-repo-verify --git-lfs \
+            -u https://github.com/ProjectInfinity-X/manifest -b 16 \
+            -g default,-mips,-darwin,-notdefault --depth=1
+
+      - name: Copy local_manifests
+        run: |
+          mkdir -p rom/.repo/local_manifests
+          cp local_manifests_src/local_manifests/roomservice.xml rom/.repo/local_manifests/roomservice.xml
+
+      - name: Repo sync
+        working-directory: ${{ github.workspace }}/rom
+        run: |
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+      - name: Setup ccache env
+        run: |
+          export USE_CCACHE=1
+          export CCACHE_DIR=~/.ccache
+          ccache -M 30G
+
+      - name: Build
+        working-directory: ${{ github.workspace }}/rom
+        env:
+          USE_CCACHE: 1
+          CCACHE_DIR: /home/runner/.ccache
+        run: |
+          source build/envsetup.sh
+          export CCACHE_EXEC=$(which ccache)
+          lunch ${{ github.event.inputs.LUNCH_COMBO }}
+          if [ "${{ github.event.inputs.CLEAN_BUILD }}" = "true" ]; then
+            make clean
+          fi
+          m ${{ github.event.inputs.BUILD_TARGET }} -j$(nproc --all)
+
+      - name: Find output zip
+        id: findzip
+        working-directory: ${{ github.workspace }}/rom
+        run: |
+          OUT_ZIP=$(find out/target/product/${{ github.event.inputs.DEVICE }} -maxdepth 1 -iname "Infinity*.zip" | head -n 1)
+          echo "zip_path=$OUT_ZIP" >> "$GITHUB_OUTPUT"
+          echo "Built: $OUT_ZIP"
+
+      - name: Upload build as artifact
+        if: steps.findzip.outputs.zip_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: InfinityX-${{ github.event.inputs.DEVICE }}-${{ github.run_id }}
+          path: ${{ github.workspace }}/rom/${{ steps.findzip.outputs.zip_path }}
+          retention-days: 14
+
+      - name: Publish to GitHub Release
+        if: steps.findzip.outputs.zip_path != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}
+          name: InfinityX ${{ github.event.inputs.DEVICE }} - run ${{ github.run_id }}
+          files: ${{ github.workspace }}/rom/${{ steps.findzip.outputs.zip_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

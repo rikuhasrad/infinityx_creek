@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  GANTI URL & REVISION DI BAWAH INI sesuai repo yang beneran kamu pake.
+  Yang aku isi sekarang itu contoh dari project-creek yang udah pernah
+  dibahas (device + vendor tree), tapi kamu WAJIB cek ulang:
+
+  1. Apakah tree ini kompatibel struktur Makefile-nya sama InfinityX
+     (beda ROM base kadang beda konvensi device.mk / board config).
+  2. Kernel tree yang bener punya siapa - ini masih perlu dipastiin,
+     coba tanya di grup Creek Lab repo kernel mana yang dipake sekarang.
+  3. hardware/xiaomi biasanya juga dibutuhin buat device Xiaomi/Redmi/POCO.
+-->
+<manifest>
+
+  <!-- Device tree -->
+  <project name="project-creek/android_device_xiaomi_creek"
+           path="device/xiaomi/creek"
+           remote="github"
+           revision="main" />
+
+  <!-- Vendor tree (blobs proprietary) -->
+  <project name="project-creek/android_vendor_xiaomi_creek"
+           path="vendor/xiaomi/creek"
+           remote="github"
+           revision="main" />
+
+  <!-- Kernel tree - GANTI dengan repo kernel yang bener buat creek -->
+  <project name="GANTI-INI/android_kernel_xiaomi_sm6225"
+           path="kernel/xiaomi/sm6225"
+           remote="github"
+           revision="main" />
+
+  <!-- Hardware xiaomi umum, dibutuhin hampir semua device Xiaomi -->
+  <project name="LineageOS/android_hardware_xiaomi"
+           path="hardware/xiaomi"
+           remote="github"
+           revision="lineage-22.2" />
+
+</manifest>
